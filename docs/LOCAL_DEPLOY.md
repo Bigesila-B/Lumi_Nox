@@ -10,7 +10,9 @@ settings panel, a MiMo TTS provider, and the live stage.
 ![Lumi_Nox local deployment architecture](assets/local-deploy-architecture.png)
 
 Everything marked ★ in the diagram is added by this fork. Boxes without ★ are the
-upstream open core, reused as-is.
+upstream open core, reused as-is. To regenerate the diagram after editing the
+deployment layer, run `python docs/assets/make_architecture_diagram.py` (needs
+Pillow and the Windows 微软雅黑 fonts).
 
 ## What the deployment layer adds
 

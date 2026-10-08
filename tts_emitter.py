@@ -81,10 +81,15 @@ class IndependentTTSEmitter(TtsEmitter):
     def finish(self) -> None:
         if self._opened:
             self._synth.finish()
+            # 合成器在 finish() 后已自行关闭（一次发声一条流）；
+            # 必须同步复位本层标志，否则下一次 speak 时 feed() 误以为
+            # 链路仍开着，所有句子被静默丢弃（表现为聊几句就没声音）。
+            self._opened = False
 
     def abort(self) -> None:
         if self._opened:
             self._synth.abort()
+            self._opened = False
 
     @property
     def stream_task_id(self):

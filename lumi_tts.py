@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 import realtime_chat
 import run_architecture
 import cosyvoice_tts
+import mimo_tts
 import voice_registry as 音色库
 from tts_emitter import BorrowE2EEmitter, IndependentTTSEmitter
 
@@ -102,9 +103,15 @@ def init(*, llm_client, llm_model: str, brand_params_fn,
     ENABLE_SUBTITLE_OBS = enable_subtitle_obs
     ENABLE_SUBTITLE_DESKTOP = enable_subtitle_desktop
 
-    # 文本架构：独立 Qwen3-TTS 合成器复用同一套依赖（pyaudio / AEC 参考缓冲 / 监听 / 日志）。
-    # 端到端架构下它不会被调用，init 无副作用。
+    # 文本架构：独立 TTS 合成器复用同一套依赖（pyaudio / AEC 参考缓冲 / 监听 / 日志）。
+    # 端到端架构下它们不会被调用，init 无副作用。
     cosyvoice_tts.init(
+        pa_instance=pa_instance,
+        ref_buffer=tts_ref_buffer,
+        monitor_device_index=monitor_device_index,
+        log_fn=_log_fn,
+    )
+    mimo_tts.init(
         pa_instance=pa_instance,
         ref_buffer=tts_ref_buffer,
         monitor_device_index=monitor_device_index,
@@ -122,11 +129,19 @@ def set_monitor_device(index):
 # 独立 TTS 兜底音色（音色名解析失败时用）：CosyVoice 系统音色 + 模型。
 INDEPENDENT_TTS_FALLBACK_VOICE_ID = "longanyang"
 INDEPENDENT_TTS_FALLBACK_MODEL = "cosyvoice-v3-plus"
+# MiMo 兜底音色（TTS_PROVIDER=mimo 时用）：MiMo 预置音色 + 模型。
+MIMO_FALLBACK_VOICE_ID = "mimo_default"
+MIMO_FALLBACK_MODEL = "mimo-v2.5-tts"
+
+
+def _independent_tts_provider():
+    """独立 TTS 提供方：.env 的 TTS_PROVIDER（mimo | cosyvoice），默认 cosyvoice。"""
+    return os.getenv("TTS_PROVIDER", "cosyvoice").strip().lower()
 
 
 def _resolve_voice_name(speaker):
     """从 voice_config 取该角色的 voice_name（音色库 key）；取不到返回空，
-    由 _make_emitter 回退到 CosyVoice 系统音色。"""
+    由 _make_emitter 回退到系统音色。"""
     try:
         from voice_config import get_speaker_config
         cfg = get_speaker_config(speaker) if speaker else None
@@ -137,21 +152,28 @@ def _resolve_voice_name(speaker):
 
 def _make_emitter(speaker, cable_index):
     """按运行架构真相源选发声器：
-    - 文本架构 → 独立 CosyVoice TTS（按角色 voice_name 经音色库解析 voice_id + model，
-      支持百炼声音复刻音色）
+    - 文本架构 → 独立 TTS（TTS_PROVIDER 选 MiMo 或 CosyVoice；按角色 voice_name
+      经音色库解析 voice_id + model，解析失败回退对应提供方的系统音色）
     - 端到端架构 → 借端到端 say_streaming
     """
     if run_architecture.use_independent_tts():
         voice_name = _resolve_voice_name(speaker)
+        provider = _independent_tts_provider()
+        if provider == "mimo":
+            fallback_id, fallback_model = MIMO_FALLBACK_VOICE_ID, MIMO_FALLBACK_MODEL
+        else:
+            fallback_id, fallback_model = (INDEPENDENT_TTS_FALLBACK_VOICE_ID,
+                                           INDEPENDENT_TTS_FALLBACK_MODEL)
         try:
             voice_id = 音色库.get_voice_id(voice_name)
             model = 音色库.get_voice_model(voice_name)
         except Exception as e:
             _log_fn(f"{C_ERR}[独立TTS] 音色解析失败 '{voice_name}': {e}，回退系统音色{C_RESET}")
-            voice_id = INDEPENDENT_TTS_FALLBACK_VOICE_ID
-            model = INDEPENDENT_TTS_FALLBACK_MODEL
+            voice_id, model = fallback_id, fallback_model
+        synth = (mimo_tts.MimoSynth() if provider == "mimo"
+                 else cosyvoice_tts.IndependentSynth())
         return IndependentTTSEmitter(
-            cosyvoice_tts.IndependentSynth(), voice_id=voice_id, model=model,
+            synth, voice_id=voice_id, model=model,
             cable_index=cable_index,
         )
     return BorrowE2EEmitter(realtime_chat, speaker)

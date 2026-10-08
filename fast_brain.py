@@ -21,18 +21,35 @@ import os
 from openai import OpenAI
 from dotenv import load_dotenv
 
+from url_guard import validate_public_http_url
+
 load_dotenv()
 
 
 # ======= 快脑配置 =======
-_ark_client = OpenAI(
-    api_key=os.getenv("ARK_API_KEY_FAST"),
-    base_url="https://ark.cn-beijing.volces.com/api/v3",
-)
-_qwen_client = OpenAI(
-    api_key=os.getenv("DASHSCOPE_API_KEY"),
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-)
+# 各供应商客户端仅在配置了对应 key 时构建（OpenAI SDK 不接受空凭据），
+# 未配置的供应商不会注册进 LLM_MODELS。
+_ark_client = None
+if os.getenv("ARK_API_KEY_FAST"):
+    _ark_client = OpenAI(
+        api_key=os.getenv("ARK_API_KEY_FAST"),
+        base_url="https://ark.cn-beijing.volces.com/api/v3",
+    )
+_qwen_client = None
+if os.getenv("DASHSCOPE_API_KEY"):
+    _qwen_client = OpenAI(
+        api_key=os.getenv("DASHSCOPE_API_KEY"),
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+# 自定义 OpenAI 兼容端点（.env：CUSTOM_LLM_BASE_URL / CUSTOM_LLM_API_KEY / CUSTOM_LLM_MODEL）。
+# key 和 model 都配置了才注册；base_url 发请求前做公网 host 校验（见 url_guard）。
+_custom_client = None
+if os.getenv("CUSTOM_LLM_API_KEY") and os.getenv("CUSTOM_LLM_MODEL"):
+    validate_public_http_url(os.getenv("CUSTOM_LLM_BASE_URL", ""))
+    _custom_client = OpenAI(
+        api_key=os.getenv("CUSTOM_LLM_API_KEY"),
+        base_url=os.getenv("CUSTOM_LLM_BASE_URL"),
+    )
 # 品牌推理参数配置：每个品牌一套独立参数
 _BRAND_PARAMS = {
     "doubao": {
@@ -99,17 +116,40 @@ LLM_MODELS = {
     "character":    ("Doubao 角色扮演",   _ark_client,   "doubao-seed-character-251128", "doubao_character"),
 }
 
+# 自定义 OpenAI 兼容模型：配置了 CUSTOM_LLM_API_KEY / CUSTOM_LLM_MODEL 才注册，
+# 品牌参数用通用 openai 档（无品牌专属 logit_bias）。
+if _custom_client is not None:
+    LLM_MODELS["custom"] = (
+        f"Custom ({os.getenv('CUSTOM_LLM_MODEL')})",
+        _custom_client,
+        os.getenv("CUSTOM_LLM_MODEL"),
+        "openai",
+    )
+
+# 未配置 key 的供应商其 client 为 None，对应条目不注册。
+LLM_MODELS = {key: entry for key, entry in LLM_MODELS.items() if entry[1] is not None}
+
 # 不支持工具调用（function calling）的模型 key。带工具的请求（游戏决策）落到这些模型上
 # 会失效，需回退到支持工具的模型来发那一次请求。
 _NO_TOOL_MODELS = {"character"}
-# 选中模型不支持工具时，带工具的请求回退到这个模型（仍走方舟、参数干净）。
-TOOL_FALLBACK_MODEL_KEY = "2.0-lite"
+# 选中模型不支持工具时，带工具的请求回退到这个模型（注册表里没有 2.0-lite 时用第一个可用模型）。
+TOOL_FALLBACK_MODEL_KEY = ("2.0-lite" if "2.0-lite" in LLM_MODELS
+                           else next(iter(LLM_MODELS), None))
 
 # 仅用作函数签名默认值，实际调用时被 _brand_params() 覆盖
 LLM_TEMPERATURE = 1.0
 
-# 当前选中的模型（由 --model 参数覆盖）
-_current_model_key = "2.0-lite"   # 默认快脑模型（2026-06-07 起 mini→lite：lite 条理更好、速度相当）
+# 当前选中的模型（由 --model 参数覆盖）；配置了自定义端点时默认走它，
+# 否则用注册表里第一个可用模型；一个都没配置则直接报错说明缺什么。
+if "custom" in LLM_MODELS:
+    _current_model_key = "custom"
+elif LLM_MODELS:
+    _current_model_key = next(iter(LLM_MODELS))
+else:
+    raise RuntimeError(
+        "没有可用的 LLM：请在 .env 配置 CUSTOM_LLM_API_KEY(+CUSTOM_LLM_BASE_URL/"
+        "CUSTOM_LLM_MODEL)，或 ARK_API_KEY_FAST / DASHSCOPE_API_KEY 至少其一"
+    )
 llm_client = LLM_MODELS[_current_model_key][1]
 LLM_MODEL = LLM_MODELS[_current_model_key][2]
 

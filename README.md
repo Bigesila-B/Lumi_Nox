@@ -91,6 +91,31 @@ tests/                   # zero-dependency public-core checks
 See [games/README.md](games/README.md) for game entry points and
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the complete data flow.
 
+## Local deployment (this fork)
+
+The open core is the engine; this fork adds the deployment layer that makes it
+runnable and operable on one machine — a launcher with a web control room, a
+settings center, a MiMo TTS provider and the live stage:
+
+```
+my_show.py       # launcher: coordinator + LLM + TTS + stage/chat servers
+show_settings.py # settings center: LLM / TTS / persona / stage, no restart
+mimo_tts.py      # MiMo streaming TTS synth (peer of cosyvoice_tts)
+url_guard.py     # pre-flight URL check: http(s) only, public host only
+```
+
+![Lumi_Nox local deployment architecture](docs/assets/local-deploy-architecture.png)
+
+That diagram is the whole picture: viewers and OBS along the top, the engine
+process in the middle (HTTP endpoints, the scheduler → arbiter → LLM → TTS chain,
+and the stage service), and configuration plus external dependencies at the
+bottom. Solid arrows are runtime traffic; the dashed red arrow is a settings
+change taking effect without a restart.
+
+See [docs/LOCAL_DEPLOY.md](docs/LOCAL_DEPLOY.md) for how to run it, how the
+settings precedence works, voice cloning and Live2D model import, and a few
+Windows-specific traps worth knowing about.
+
 ## Getting started
 
 The coordination layer and the `main.py` demo are pure standard library. To run
